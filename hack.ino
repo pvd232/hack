@@ -1,9 +1,9 @@
 /*
- * Combined HC-SR04 Ultrasonic Sensor and Motor Control Example
+ * Autonomous Navigation Robot with Ultrasonic Sensor
  *
- * This sketch integrates an HC-SR04 ultrasonic sensor with motor control functionalities.
- * It measures distance using the ultrasonic sensor and controls two motors to move
- * forward and backward based on predefined intervals.
+ * This sketch allows a robot to navigate a room by moving forward until it
+ * detects an obstacle, then turning to avoid it using only a front-facing
+ * ultrasonic sensor.
  */
 
 // ==============================
@@ -21,9 +21,11 @@ const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 // Measurement interval (milliseconds)
 const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
 
+// Obstacle detection threshold (centimeters)
+const float OBSTACLE_THRESHOLD = 20.0;
+
 // Function Prototypes for Ultrasonic Sensor
 void setupUltrasonicSensor();
-void triggerUltrasonic();
 float measureDistance();
 void displayDistance(float distance);
 
@@ -33,70 +35,25 @@ void displayDistance(float distance);
 
 // Define motor control pins
 const int ENA = 9; // Enable pin for Motor 1 (PWM)
-const int IN6 = 7; // Direction pin 1 for Motor 1
-const int IN7 = 8; // Direction pin 2 for Motor 1
+const int IN1 = 7; // Direction pin 1 for Motor 1
+const int IN2 = 8; // Direction pin 2 for Motor 1
 
-const int ENA2 = 10; // Enable pin for Motor 2 (PWM)
-const int IN3 = 5;   // Direction pin 1 for Motor 2
-const int IN4 = 6;   // Direction pin 2 for Motor 2
+const int ENB = 10; // Enable pin for Motor 2 (PWM)
+const int IN3 = 5;  // Direction pin 1 for Motor 2
+const int IN4 = 6;  // Direction pin 2 for Motor 2
 
 // Define motor speed
 const int MOTOR_SPEED = 150; // Speed value (0-255)
 
-// Timing intervals for motor control (milliseconds)
-const unsigned long MOTOR_RUN_INTERVAL = 3000;  // 3 seconds
-const unsigned long MOTOR_STOP_INTERVAL = 2000; // 2 seconds
+// Turn duration (milliseconds) - Adjust experimentally
+const unsigned long TURN_DURATION = 650; // Approximate duration for 90-degree turn
 
 // Function Prototypes for Motor Control
 void setupMotorPins();
-void runMotorsForward(int speed);
-void runMotorsBackward(int speed);
+void moveForward(int speed);
 void stopMotors();
-void controlMotor(int enaPin, int in1Pin, int in2Pin, bool forward, int speed);
-
-// ==============================
-// ========= Setup Function ======
-// ==============================
-
-void setup()
-{
-    // Initialize Serial Communication
-    Serial.begin(9600);
-
-    // Initialize Ultrasonic Sensor
-    setupUltrasonicSensor();
-
-    // Initialize Motor Control
-    setupMotorPins();
-}
-
-// ==============================
-// ========= Loop Function =======
-// ==============================
-
-void loop()
-{
-    // Ultrasonic Sensor Measurement
-    triggerUltrasonic();
-    float distance = measureDistance();
-    displayDistance(distance);
-
-    // Motor Control Sequence
-    runMotorsForward(MOTOR_SPEED);
-    delay(MOTOR_RUN_INTERVAL); // Run motors forward for 3 seconds
-
-    stopMotors();
-    delay(MOTOR_STOP_INTERVAL); // Stop motors for 2 seconds
-
-    runMotorsBackward(MOTOR_SPEED);
-    delay(MOTOR_RUN_INTERVAL); // Run motors backward for 3 seconds
-
-    stopMotors();
-    delay(MOTOR_STOP_INTERVAL); // Stop motors for 2 seconds
-
-    // Small delay before next sensor measurement
-    delay(SENSOR_MEASUREMENT_INTERVAL);
-}
+void turnRight();
+void turnLeft();
 
 // ==============================
 // ==== Ultrasonic Sensor Functions ===
@@ -113,25 +70,19 @@ void setupUltrasonicSensor()
 }
 
 /**
- * @brief Sends a trigger pulse to initiate ultrasonic burst.
- */
-void triggerUltrasonic()
-{
-    digitalWrite(TRIG_PIN, LOW);
-    delayMicroseconds(2);
-
-    digitalWrite(TRIG_PIN, HIGH);
-    delayMicroseconds(10); // Trigger pulse duration of 10µs
-    digitalWrite(TRIG_PIN, LOW);
-}
-
-/**
  * @brief Measures the duration of the echo pulse and calculates distance.
  *
  * @return float The calculated distance in centimeters. Returns -1 if out of range.
  */
 float measureDistance()
 {
+    // Send a trigger pulse
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10); // Trigger pulse duration of 10µs
+    digitalWrite(TRIG_PIN, LOW);
+
     // Measure the duration of the echo pulse in microseconds
     float duration = pulseIn(ECHO_PIN, HIGH, SENSOR_TIMEOUT); // Timeout after 30ms to prevent blocking
 
@@ -176,73 +127,141 @@ void setupMotorPins()
 {
     // Initialize Motor 1 pins
     pinMode(ENA, OUTPUT);
-    pinMode(IN6, OUTPUT);
-    pinMode(IN7, OUTPUT);
+    pinMode(IN1, OUTPUT);
+    pinMode(IN2, OUTPUT);
 
     // Initialize Motor 2 pins
-    pinMode(ENA2, OUTPUT);
+    pinMode(ENB, OUTPUT);
     pinMode(IN3, OUTPUT);
     pinMode(IN4, OUTPUT);
 }
 
 /**
- * @brief Runs both motors forward at the specified speed.
+ * @brief Moves the robot forward at the specified speed.
  *
  * @param speed PWM value (0-255)
  */
-void runMotorsForward(int speed)
+void moveForward(int speed)
 {
-    controlMotor(ENA, IN6, IN7, true, speed);  // Motor 1 forward
-    controlMotor(ENA2, IN3, IN4, true, speed); // Motor 2 forward
+    // Motor 1 forward
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, speed);
+
+    // Motor 2 forward
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, speed);
 }
 
 /**
- * @brief Runs both motors backward at the specified speed.
- *
- * @param speed PWM value (0-255)
- */
-void runMotorsBackward(int speed)
-{
-    controlMotor(ENA, IN6, IN7, false, speed);  // Motor 1 backward
-    controlMotor(ENA2, IN3, IN4, false, speed); // Motor 2 backward
-}
-
-/**
- * @brief Stops both motors by setting direction pins LOW and PWM to 0.
+ * @brief Stops both motors.
  */
 void stopMotors()
 {
     // Stop Motor 1
-    digitalWrite(IN6, LOW);
-    digitalWrite(IN7, LOW);
-    analogWrite(ENA, 0); // Optional: Set speed to 0
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, 0);
 
     // Stop Motor 2
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, LOW);
-    analogWrite(ENA2, 0); // Optional: Set speed to 0
+    analogWrite(ENB, 0);
 }
 
 /**
- * @brief Controls a single motor's direction and speed.
- *
- * @param enaPin Enable pin connected to PWM for speed control.
- * @param in1Pin Direction pin 1.
- * @param in2Pin Direction pin 2.
- * @param forward Boolean indicating direction. True for forward, false for backward.
- * @param speed PWM value (0-255).
+ * @brief Turns the robot right by running motors in opposite directions.
  */
-void controlMotor(int enaPin, int in1Pin, int in2Pin, bool forward, int speed)
+void turnRight()
 {
-    if (forward)
+    // Motor 1 forward
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, MOTOR_SPEED);
+
+    // Motor 2 backward
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, MOTOR_SPEED);
+
+    delay(TURN_DURATION); // Turn duration to approximate 90 degrees
+
+    stopMotors(); // Stop after turning
+}
+
+/**
+ * @brief Turns the robot left by running motors in opposite directions.
+ */
+void turnLeft()
+{
+    // Motor 1 backward
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, MOTOR_SPEED);
+
+    // Motor 2 forward
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, MOTOR_SPEED);
+
+    delay(TURN_DURATION); // Turn duration to approximate 90 degrees
+
+    stopMotors(); // Stop after turning
+}
+
+// ==============================
+// ========= Setup Function ======
+// ==============================
+
+void setup()
+{
+    // Initialize Serial Communication
+    Serial.begin(9600);
+
+    // Initialize Ultrasonic Sensor
+    setupUltrasonicSensor();
+
+    // Initialize Motor Control
+    setupMotorPins();
+}
+
+// ==============================
+// ========= Loop Function =======
+// ==============================
+
+// Variable to alternate turn directions
+bool turnRightNext = true;
+
+void loop()
+{
+    // Measure distance ahead
+    float distance = measureDistance();
+    displayDistance(distance);
+
+    if (distance > 0 && distance < OBSTACLE_THRESHOLD)
     {
-        digitalWrite(in1Pin, HIGH);
-        digitalWrite(in2Pin, LOW);
+        // Obstacle detected within threshold
+        stopMotors(); // Stop before turning
+        delay(200);   // Brief pause
+
+        if (turnRightNext)
+        {
+            turnRight();
+            turnRightNext = false; // Next time, turn left
+        }
+        else
+        {
+            turnLeft();
+            turnRightNext = true; // Next time, turn right
+        }
     }
     else
     {
-        digitalWrite(in1Pin, LOW);
-        digitalWrite(in2Pin, HIGH);
+        // No obstacle detected, move forward
+        moveForward(MOTOR_SPEED);
     }
-    analogWrite(enaPin, speed);
+
+    // Small delay before next sensor measurement
+    delay(SENSOR_MEASUREMENT_INTERVAL);
 }
