@@ -11,8 +11,8 @@
 // ==============================
 
 // Define ultrasonic sensor pins
-#define TRIG_PIN 11
-#define ECHO_PIN 12
+const int TRIG_PIN = 11;
+const int ECHO_PIN = 12;
 
 // Constants for distance calculation
 const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
