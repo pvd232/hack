@@ -1,9 +1,9 @@
 /*
- * Autonomous Navigation Robot with Ultrasonic Sensor
+ * Autonomous Navigation Robot with Ultrasonic Sensors and Mapping
  *
  * This sketch allows a robot to navigate a room by moving forward until it
- * detects an obstacle, then turning to avoid it using only a front-facing
- * ultrasonic sensor.
+ * detects an obstacle, then turning to avoid it using front, left, and right
+ * ultrasonic sensors. It also creates a simple grid map of the environment.
  */
 
 // ==============================
@@ -11,23 +11,29 @@
 // ==============================
 
 // Define ultrasonic sensor pins
-const int TRIG_PIN = 11;
-const int ECHO_PIN = 12;
+const int TRIG_PIN_FRONT = 11;
+const int ECHO_PIN_FRONT = 12;
+
+const int TRIG_PIN_LEFT = 13; // Assign appropriate pins
+const int ECHO_PIN_LEFT = 14;
+
+const int TRIG_PIN_RIGHT = 15;
+const int ECHO_PIN_RIGHT = 16;
 
 // Constants for distance calculation
 const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
 const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 
-// Measurement interval (milliseconds)
-const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
-
 // Obstacle detection threshold (centimeters)
 const float OBSTACLE_THRESHOLD = 20.0;
 
-// Function Prototypes for Ultrasonic Sensor
-void setupUltrasonicSensor();
-float measureDistance();
-void displayDistance(float distance);
+// Measurement interval (milliseconds)
+const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
+
+// Function Prototypes for Ultrasonic Sensors
+void setupUltrasonicSensors();
+float measureDistance(int trigPin, int echoPin);
+void displayDistances(float frontDist, float leftDist, float rightDist);
 
 // ==============================
 // ======= Motor Control Setup ===
@@ -56,35 +62,138 @@ void turnRight();
 void turnLeft();
 
 // ==============================
+// ======= Mapping Setup ===
+// ==============================
+
+const int GRID_SIZE = 20;           // Adjust based on room size and resolution
+byte gridMap[GRID_SIZE][GRID_SIZE]; // 0: Unknown, 1: Free, 2: Obstacle
+
+// Robot's current position and orientation
+int posX = GRID_SIZE / 2;
+int posY = GRID_SIZE / 2;
+enum Orientation
+{
+    NORTH,
+    EAST,
+    SOUTH,
+    WEST
+};
+Orientation currentOrientation = NORTH;
+
+// Function Prototypes for Mapping
+void updateMap(float frontDist, float leftDist, float rightDist);
+void updatePosition();
+void printGridMap();
+
+// ==============================
+// ========= Setup Function ======
+// ==============================
+
+void setup()
+{
+    // Initialize Serial Communication
+    Serial.begin(9600);
+
+    // Initialize Ultrasonic Sensors
+    setupUltrasonicSensors();
+
+    // Initialize Motor Control
+    setupMotorPins();
+
+    // Initialize Grid Map
+    for (int i = 0; i < GRID_SIZE; i++)
+    {
+        for (int j = 0; j < GRID_SIZE; j++)
+        {
+            gridMap[i][j] = 0; // Unknown
+        }
+    }
+
+    // Mark starting position as free space
+    gridMap[posX][posY] = 1; // Free
+}
+
+// ==============================
+// ========= Loop Function =======
+// ==============================
+
+void loop()
+{
+    // Measure distances
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+    displayDistances(frontDist, leftDist, rightDist);
+
+    // Update the map based on sensor readings
+    updateMap(frontDist, leftDist, rightDist);
+
+    // Decision-making based on sensor data
+    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+    {
+        // Obstacle detected in front
+        stopMotors();
+        delay(200); // Brief pause
+
+        // Decide turn direction based on left and right distances
+        if (leftDist > rightDist)
+        {
+            turnLeft();
+            currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
+        }
+        else
+        {
+            turnRight();
+            currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
+        }
+    }
+    else
+    {
+        // No obstacle in front, move forward
+        moveForward(MOTOR_SPEED);
+        updatePosition(); // Update position after moving forward
+    }
+
+    // Small delay before next sensor measurement
+    delay(SENSOR_MEASUREMENT_INTERVAL);
+
+    // Optional: Print the grid map
+    // printGridMap();
+}
+
+// ==============================
 // ==== Ultrasonic Sensor Functions ===
 // ==============================
 
-/**
- * @brief Initializes the ultrasonic sensor pins.
- */
-void setupUltrasonicSensor()
+void setupUltrasonicSensors()
 {
-    pinMode(TRIG_PIN, OUTPUT);
-    pinMode(ECHO_PIN, INPUT);
-    digitalWrite(TRIG_PIN, LOW); // Ensure trigger pin is LOW initially
+    // Front sensor
+    pinMode(TRIG_PIN_FRONT, OUTPUT);
+    pinMode(ECHO_PIN_FRONT, INPUT);
+    digitalWrite(TRIG_PIN_FRONT, LOW);
+
+    // Left sensor
+    pinMode(TRIG_PIN_LEFT, OUTPUT);
+    pinMode(ECHO_PIN_LEFT, INPUT);
+    digitalWrite(TRIG_PIN_LEFT, LOW);
+
+    // Right sensor
+    pinMode(TRIG_PIN_RIGHT, OUTPUT);
+    pinMode(ECHO_PIN_RIGHT, INPUT);
+    digitalWrite(TRIG_PIN_RIGHT, LOW);
 }
 
-/**
- * @brief Measures the duration of the echo pulse and calculates distance.
- *
- * @return float The calculated distance in centimeters. Returns -1 if out of range.
- */
-float measureDistance()
+float measureDistance(int trigPin, int echoPin)
 {
     // Send a trigger pulse
-    digitalWrite(TRIG_PIN, LOW);
+    digitalWrite(trigPin, LOW);
     delayMicroseconds(2);
-    digitalWrite(TRIG_PIN, HIGH);
-    delayMicroseconds(10); // Trigger pulse duration of 10µs
-    digitalWrite(TRIG_PIN, LOW);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
 
     // Measure the duration of the echo pulse in microseconds
-    float duration = pulseIn(ECHO_PIN, HIGH, SENSOR_TIMEOUT); // Timeout after 30ms to prevent blocking
+    float duration = pulseIn(echoPin, HIGH, SENSOR_TIMEOUT);
 
     // Check for timeout (no echo received)
     if (duration == 0)
@@ -97,32 +206,21 @@ float measureDistance()
     return distance;
 }
 
-/**
- * @brief Displays the measured distance on the serial monitor.
- *
- * @param distance The distance to display.
- */
-void displayDistance(float distance)
+void displayDistances(float frontDist, float leftDist, float rightDist)
 {
-    if (distance >= 0)
-    {
-        Serial.print("Distance: ");
-        Serial.print(distance);
-        Serial.println(" cm");
-    }
-    else
-    {
-        Serial.println("Distance: Out of range");
-    }
+    Serial.print("Front: ");
+    Serial.print(frontDist);
+    Serial.print(" cm, Left: ");
+    Serial.print(leftDist);
+    Serial.print(" cm, Right: ");
+    Serial.print(rightDist);
+    Serial.println(" cm");
 }
 
 // ==============================
 // ==== Motor Control Functions ===
 // ==============================
 
-/**
- * @brief Initializes motor control pins as outputs.
- */
 void setupMotorPins()
 {
     // Initialize Motor 1 pins
@@ -136,11 +234,6 @@ void setupMotorPins()
     pinMode(IN4, OUTPUT);
 }
 
-/**
- * @brief Moves the robot forward at the specified speed.
- *
- * @param speed PWM value (0-255)
- */
 void moveForward(int speed)
 {
     // Motor 1 forward
@@ -154,9 +247,6 @@ void moveForward(int speed)
     analogWrite(ENB, speed);
 }
 
-/**
- * @brief Stops both motors.
- */
 void stopMotors()
 {
     // Stop Motor 1
@@ -170,9 +260,6 @@ void stopMotors()
     analogWrite(ENB, 0);
 }
 
-/**
- * @brief Turns the robot right by running motors in opposite directions.
- */
 void turnRight()
 {
     // Motor 1 forward
@@ -185,14 +272,11 @@ void turnRight()
     digitalWrite(IN4, HIGH);
     analogWrite(ENB, MOTOR_SPEED);
 
-    delay(TURN_DURATION); // Turn duration to approximate 90 degrees
+    delay(TURN_DURATION); // Adjust experimentally
 
-    stopMotors(); // Stop after turning
+    stopMotors();
 }
 
-/**
- * @brief Turns the robot left by running motors in opposite directions.
- */
 void turnLeft()
 {
     // Motor 1 backward
@@ -205,63 +289,156 @@ void turnLeft()
     digitalWrite(IN4, LOW);
     analogWrite(ENB, MOTOR_SPEED);
 
-    delay(TURN_DURATION); // Turn duration to approximate 90 degrees
+    delay(TURN_DURATION); // Adjust experimentally
 
-    stopMotors(); // Stop after turning
+    stopMotors();
 }
 
 // ==============================
-// ========= Setup Function ======
+// ==== Mapping Functions ===
 // ==============================
 
-void setup()
+void updateMap(float frontDist, float leftDist, float rightDist)
 {
-    // Initialize Serial Communication
-    Serial.begin(9600);
+    // Grid cell size in cm
+    const float CELL_SIZE = 20.0;
 
-    // Initialize Ultrasonic Sensor
-    setupUltrasonicSensor();
+    // Mark the cell in front
+    if (frontDist > 0 && frontDist <= OBSTACLE_THRESHOLD)
+    {
+        int cellAheadX = posX;
+        int cellAheadY = posY;
 
-    // Initialize Motor Control
-    setupMotorPins();
+        switch (currentOrientation)
+        {
+        case NORTH:
+            cellAheadY -= 1;
+            break;
+        case EAST:
+            cellAheadX += 1;
+            break;
+        case SOUTH:
+            cellAheadY += 1;
+            break;
+        case WEST:
+            cellAheadX -= 1;
+            break;
+        }
+
+        if (cellAheadX >= 0 && cellAheadX < GRID_SIZE && cellAheadY >= 0 && cellAheadY < GRID_SIZE)
+        {
+            gridMap[cellAheadX][cellAheadY] = 2; // Obstacle
+        }
+    }
+
+    // Similarly, mark the cells to the left and right
+    // Left
+    if (leftDist > 0 && leftDist <= OBSTACLE_THRESHOLD)
+    {
+        int cellLeftX = posX;
+        int cellLeftY = posY;
+
+        switch (currentOrientation)
+        {
+        case NORTH:
+            cellLeftX -= 1;
+            break;
+        case EAST:
+            cellLeftY -= 1;
+            break;
+        case SOUTH:
+            cellLeftX += 1;
+            break;
+        case WEST:
+            cellLeftY += 1;
+            break;
+        }
+
+        if (cellLeftX >= 0 && cellLeftX < GRID_SIZE && cellLeftY >= 0 && cellLeftY < GRID_SIZE)
+        {
+            gridMap[cellLeftX][cellLeftY] = 2; // Obstacle
+        }
+    }
+
+    // Right
+    if (rightDist > 0 && rightDist <= OBSTACLE_THRESHOLD)
+    {
+        int cellRightX = posX;
+        int cellRightY = posY;
+
+        switch (currentOrientation)
+        {
+        case NORTH:
+            cellRightX += 1;
+            break;
+        case EAST:
+            cellRightY += 1;
+            break;
+        case SOUTH:
+            cellRightX -= 1;
+            break;
+        case WEST:
+            cellRightY -= 1;
+            break;
+        }
+
+        if (cellRightX >= 0 && cellRightX < GRID_SIZE && cellRightY >= 0 && cellRightY < GRID_SIZE)
+        {
+            gridMap[cellRightX][cellRightY] = 2; // Obstacle
+        }
+    }
+
+    // Mark current position as free space
+    gridMap[posX][posY] = 1; // Free
 }
 
-// ==============================
-// ========= Loop Function =======
-// ==============================
-
-// Variable to alternate turn directions
-bool turnRightNext = true;
-
-void loop()
+void updatePosition()
 {
-    // Measure distance ahead
-    float distance = measureDistance();
-    displayDistance(distance);
-
-    if (distance > 0 && distance < OBSTACLE_THRESHOLD)
+    // Since we don't have encoders, we'll assume that each forward movement moves one cell
+    switch (currentOrientation)
     {
-        // Obstacle detected within threshold
-        stopMotors(); // Stop before turning
-        delay(200);   // Brief pause
-
-        if (turnRightNext)
-        {
-            turnRight();
-            turnRightNext = false; // Next time, turn left
-        }
-        else
-        {
-            turnLeft();
-            turnRightNext = true; // Next time, turn right
-        }
-    }
-    else
-    {
-        // No obstacle detected, move forward
-        moveForward(MOTOR_SPEED);
+    case NORTH:
+        if (posY > 0)
+            posY -= 1;
+        break;
+    case EAST:
+        if (posX < GRID_SIZE - 1)
+            posX += 1;
+        break;
+    case SOUTH:
+        if (posY < GRID_SIZE - 1)
+            posY += 1;
+        break;
+    case WEST:
+        if (posX > 0)
+            posX -= 1;
+        break;
     }
 
-    // Small delay before next sensor measurement
-    delay(SENSOR_MEASUREMENT_INTERVAL);
+    // Mark new position as free space
+    gridMap[posX][posY] = 1; // Free
+
+    // Move for a fixed duration to simulate moving one cell
+    delay(1000); // Adjust duration as needed
+}
+
+void printGridMap()
+{
+    for (int y = 0; y < GRID_SIZE; y++)
+    {
+        for (int x = 0; x < GRID_SIZE; x++)
+        {
+            if (x == posX && y == posY)
+            {
+                Serial.print("R "); // Robot's current position
+            }
+            else
+            {
+                Serial.print(gridMap[x][y]);
+                Serial.print(" ");
+            }
+        }
+        Serial.println();
+    }
+    Serial.println("---------------------------");
 }
