@@ -4,6 +4,9 @@
  * This sketch allows a robot to navigate a room by moving forward until it
  * detects an obstacle, then turning to avoid it using front, left, and right
  * ultrasonic sensors. It also creates a simple grid map of the environment.
+ *
+ * After mapping, the robot navigates to different quadrants of the room,
+ * rests for 10 seconds at each, and continues the cycle.
  */
 
 // ==============================
@@ -86,6 +89,30 @@ void updatePosition();
 void printGridMap();
 
 // ==============================
+// ==== New Functionality Setup ===
+// ==============================
+
+// Flag to indicate if mapping is complete
+bool mappingComplete = false;
+
+// Define quadrant positions
+struct Position
+{
+    int x;
+    int y;
+};
+
+Position quadrants[4];
+
+// Index of the current quadrant to visit
+int currentQuadrantIndex = 0;
+
+// Function Prototypes for new functionalities
+bool isMappingComplete();
+void navigateTo(Position target);
+void rotateToOrientation(Orientation targetOrientation);
+
+// ==============================
 // ========= Setup Function ======
 // ==============================
 
@@ -111,6 +138,12 @@ void setup()
 
     // Mark starting position as free space
     gridMap[posX][posY] = 1; // Free
+
+    // Initialize Quadrant Positions
+    quadrants[0] = {GRID_SIZE / 4, GRID_SIZE / 4};         // Top-left quadrant
+    quadrants[1] = {3 * GRID_SIZE / 4, GRID_SIZE / 4};     // Top-right quadrant
+    quadrants[2] = {3 * GRID_SIZE / 4, 3 * GRID_SIZE / 4}; // Bottom-right quadrant
+    quadrants[3] = {GRID_SIZE / 4, 3 * GRID_SIZE / 4};     // Bottom-left quadrant
 }
 
 // ==============================
@@ -119,46 +152,72 @@ void setup()
 
 void loop()
 {
-    // Measure distances
-    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
-    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
-    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
-    displayDistances(frontDist, leftDist, rightDist);
-
-    // Update the map based on sensor readings
-    updateMap(frontDist, leftDist, rightDist);
-
-    // Decision-making based on sensor data
-    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+    if (!mappingComplete)
     {
-        // Obstacle detected in front
-        stopMotors();
-        delay(200); // Brief pause
+        // Measure distances
+        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+        displayDistances(frontDist, leftDist, rightDist);
 
-        // Decide turn direction based on left and right distances
-        if (leftDist > rightDist)
+        // Update the map based on sensor readings
+        updateMap(frontDist, leftDist, rightDist);
+
+        // Decision-making based on sensor data
+        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
         {
-            turnLeft();
-            currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
+            // Obstacle detected in front
+            stopMotors();
+            delay(200); // Brief pause
+
+            // Decide turn direction based on left and right distances
+            if (leftDist > rightDist)
+            {
+                turnLeft();
+                currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
+            }
+            else
+            {
+                turnRight();
+                currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
+            }
         }
         else
         {
-            turnRight();
-            currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
+            // No obstacle in front, move forward
+            moveForward(MOTOR_SPEED);
+            updatePosition(); // Update position after moving forward
+        }
+
+        // Small delay before next sensor measurement
+        delay(SENSOR_MEASUREMENT_INTERVAL);
+
+        // Optional: Print the grid map
+        // printGridMap();
+
+        // Check if mapping is complete
+        if (isMappingComplete())
+        {
+            mappingComplete = true;
+            stopMotors();
+            Serial.println("Mapping complete. Starting quadrant navigation.");
         }
     }
     else
     {
-        // No obstacle in front, move forward
-        moveForward(MOTOR_SPEED);
-        updatePosition(); // Update position after moving forward
+        // Navigate to quadrants
+        Position target = quadrants[currentQuadrantIndex];
+        navigateTo(target);
+
+        // Wait for 10 seconds
+        Serial.print("Arrived at quadrant ");
+        Serial.println(currentQuadrantIndex + 1);
+        stopMotors();
+        delay(10000); // 10 seconds
+
+        // Move to the next quadrant
+        currentQuadrantIndex = (currentQuadrantIndex + 1) % 4;
     }
-
-    // Small delay before next sensor measurement
-    delay(SENSOR_MEASUREMENT_INTERVAL);
-
-    // Optional: Print the grid map
-    // printGridMap();
 }
 
 // ==============================
@@ -419,7 +478,11 @@ void updatePosition()
     gridMap[posX][posY] = 1; // Free
 
     // Move for a fixed duration to simulate moving one cell
-    delay(1000); // Adjust duration as needed
+    // Only delay during mapping to avoid unnecessary pauses during navigation
+    if (!mappingComplete)
+    {
+        delay(1000); // Adjust duration as needed
+    }
 }
 
 void printGridMap()
@@ -441,4 +504,107 @@ void printGridMap()
         Serial.println();
     }
     Serial.println("---------------------------");
+}
+
+// ==============================
+// ==== New Function Definitions ===
+// ==============================
+
+/**
+ * @brief Checks if all accessible cells have been visited.
+ *
+ * @return true if mapping is complete, false otherwise.
+ */
+bool isMappingComplete()
+{
+    for (int i = 0; i < GRID_SIZE; i++)
+    {
+        for (int j = 0; j < GRID_SIZE; j++)
+        {
+            // If there is any unknown (0) cell adjacent to a free space (1), mapping is not complete
+            if (gridMap[i][j] == 0)
+            {
+                // Check if this unknown cell is adjacent to a free space
+                if ((i > 0 && gridMap[i - 1][j] == 1) ||
+                    (i < GRID_SIZE - 1 && gridMap[i + 1][j] == 1) ||
+                    (j > 0 && gridMap[i][j - 1] == 1) ||
+                    (j < GRID_SIZE - 1 && gridMap[i][j + 1] == 1))
+                {
+                    return false; // Still areas to explore
+                }
+            }
+        }
+    }
+    return true; // All accessible areas have been explored
+}
+
+/**
+ * @brief Navigates the robot to the target grid position.
+ *
+ * @param target The target position to navigate to.
+ */
+void navigateTo(Position target)
+{
+    // Simplified navigation: Move in grid steps towards the target
+    while (posX != target.x || posY != target.y)
+    {
+        // Determine the direction to move in X axis
+        if (posX < target.x)
+        {
+            rotateToOrientation(EAST);
+            moveForward(MOTOR_SPEED);
+            updatePosition();
+        }
+        else if (posX > target.x)
+        {
+            rotateToOrientation(WEST);
+            moveForward(MOTOR_SPEED);
+            updatePosition();
+        }
+        // Determine the direction to move in Y axis
+        else if (posY < target.y)
+        {
+            rotateToOrientation(SOUTH);
+            moveForward(MOTOR_SPEED);
+            updatePosition();
+        }
+        else if (posY > target.y)
+        {
+            rotateToOrientation(NORTH);
+            moveForward(MOTOR_SPEED);
+            updatePosition();
+        }
+
+        // Add obstacle avoidance during navigation
+        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+        {
+            // Obstacle detected, need to avoid
+            stopMotors();
+            delay(200);
+            // Try to turn and bypass the obstacle
+            turnRight();
+            currentOrientation = (Orientation)((currentOrientation + 1) % 4);
+        }
+
+        // Update the map with new sensor readings
+        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+        updateMap(frontDist, leftDist, rightDist);
+    }
+}
+
+/**
+ * @brief Rotates the robot to face the target orientation.
+ *
+ * @param targetOrientation The orientation to rotate to.
+ */
+void rotateToOrientation(Orientation targetOrientation)
+{
+    while (currentOrientation != targetOrientation)
+    {
+        turnRight();
+        currentOrientation = (Orientation)((currentOrientation + 1) % 4);
+        delay(200); // Brief pause after turning
+    }
 }
