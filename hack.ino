@@ -14,21 +14,32 @@
 // ==============================
 
 // Define ultrasonic sensor pins
-const int TRIG_PIN_FRONT = 11;
+const int TRIG_PIN_FRONT = 13;
 const int ECHO_PIN_FRONT = 12;
 
-const int TRIG_PIN_LEFT = 13; // Assign appropriate pins
-const int ECHO_PIN_LEFT = 14;
+const int TRIG_PIN_LEFT = 17; // Assign appropriate pins
+const int ECHO_PIN_LEFT = 18;
 
 const int TRIG_PIN_RIGHT = 15;
 const int ECHO_PIN_RIGHT = 16;
+
+//CHRISTIAN added for upper sensor
+const int TRIG_PIN_ABOVE = 11;
+const int ECHO_PIN_ABOVE = 10;
+
+//CHRISTIAN added time to wait for fall
+const int FALL_WAIT_TIME = 5000;
+boolean fell = false;
+
+//CHRISTIAN added LED sensor pin
+const int ledPin = 9;
 
 // Constants for distance calculation
 const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
 const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 
 // Obstacle detection threshold (centimeters)
-const float OBSTACLE_THRESHOLD = 20.0;
+const float OBSTACLE_THRESHOLD = 30.0;
 
 // Measurement interval (milliseconds)
 const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
@@ -43,13 +54,13 @@ void displayDistances(float frontDist, float leftDist, float rightDist);
 // ==============================
 
 // Define motor control pins
-const int ENA = 9; // Enable pin for Motor 1 (PWM)
-const int IN1 = 7; // Direction pin 1 for Motor 1
-const int IN2 = 8; // Direction pin 2 for Motor 1
+const int ENA = 2; // Enable pin for Motor Left (PWM)
+const int IN1 = 3; // Direction pin 1 for Motor 1/Left (Output)
+const int IN2 = 4; // Direction pin 2 for Motor 1/Right (Input)
 
-const int ENB = 10; // Enable pin for Motor 2 (PWM)
-const int IN3 = 5;  // Direction pin 1 for Motor 2
-const int IN4 = 6;  // Direction pin 2 for Motor 2
+const int ENB = 5; // Enable pin for Motor Right (PWM)
+const int IN3 = 6;  // Direction pin 1 for Motor 2/Right (Output)
+const int IN4 = 7;  // Direction pin 2 for Motor 2/Right (Input)
 
 // Define motor speed
 const int MOTOR_SPEED = 150; // Speed value (0-255)
@@ -121,6 +132,10 @@ void setup()
     // Initialize Serial Communication
     Serial.begin(9600);
 
+    //CHRISTIAN added Initialize LED light, start with it off
+    pinMode(ledPin, OUTPUT);
+    digitalWrite(ledPin, LOW);
+
     // Initialize Ultrasonic Sensors
     setupUltrasonicSensors();
 
@@ -152,73 +167,60 @@ void setup()
 
 void loop()
 {
-    if (!mappingComplete)
-    {
-        // Measure distances
-        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
-        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
-        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
-        displayDistances(frontDist, leftDist, rightDist);
-
-        // Update the map based on sensor readings
-        updateMap(frontDist, leftDist, rightDist);
-
-        // Decision-making based on sensor data
-        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
-        {
-            // Obstacle detected in front
-            stopMotors();
-            delay(200); // Brief pause
-
-            // Decide turn direction based on left and right distances
-            if (leftDist > rightDist)
-            {
-                turnLeft();
-                currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
-            }
-            else
-            {
-                turnRight();
-                currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
-            }
-        }
-        else
-        {
-            // No obstacle in front, move forward
-            moveForward(MOTOR_SPEED);
-            updatePosition(); // Update position after moving forward
-        }
-
-        // Small delay before next sensor measurement
-        delay(SENSOR_MEASUREMENT_INTERVAL);
-
-        // Optional: Print the grid map
-        // printGridMap();
-
-        // Check if mapping is complete
-        if (isMappingComplete())
-        {
-            mappingComplete = true;
-            stopMotors();
-            Serial.println("Mapping complete. Starting quadrant navigation.");
-        }
-    }
-    else
-    {
-        // Navigate to quadrants
-        Position target = quadrants[currentQuadrantIndex];
-        navigateTo(target);
-
-        // Wait for 10 seconds
-        Serial.print("Arrived at quadrant ");
-        Serial.println(currentQuadrantIndex + 1);
-        stopMotors();
-        delay(10000); // 10 seconds
-
-        // Move to the next quadrant
-        currentQuadrantIndex = (currentQuadrantIndex + 1) % 4;
+    //CHRISTIAN separate logic here to test follow, detect, respond functionality
+    while(!fell) {
+        follow();
     }
 }
+
+//CHRISTIAN added
+void follow() {
+    float frontDist;
+    
+    while ((frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT)) > OBSTACLE_THRESHOLD) {
+        moveForward(MOTOR_SPEED);
+    }
+    stopMotors();
+
+    int result = detect();
+
+    if (result) {
+        respond();
+    }
+}
+
+//CHRISTIAN added
+int detect() {
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float aboveDist = measureDistance(TRIG_PIN_ABOVE, ECHO_PIN_ABOVE);
+    float frontTest, aboveTest;
+
+    while (true) {
+        delay(FALL_WAIT_TIME); // time to wait for person falling
+        frontTest = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        aboveTest = measureDistance(TRIG_PIN_ABOVE, ECHO_PIN_ABOVE);
+
+        float frontDif = frontTest - frontDist;
+        float aboveDif = aboveTest - aboveDist;
+
+        if (frontDif > OBSTACLE_THRESHOLD || frontDif < (OBSTACLE_THRESHOLD * -1)) {
+            break;
+        }
+        else if (aboveDif > OBSTACLE_THRESHOLD) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+//CHRISTIAN added
+void respond() {
+    digitalWrite(ledPin, HIGH);
+    delay(10000); // 10 seconds
+    digitalWrite(ledPin, LOW);
+    fell = true;
+}
+
 
 // ==============================
 // ==== Ultrasonic Sensor Functions ===
@@ -240,6 +242,12 @@ void setupUltrasonicSensors()
     pinMode(TRIG_PIN_RIGHT, OUTPUT);
     pinMode(ECHO_PIN_RIGHT, INPUT);
     digitalWrite(TRIG_PIN_RIGHT, LOW);
+
+    //CHRISTIAN added Above sensor
+    pinMode(TRIG_PIN_ABOVE, OUTPUT);
+    pinMode(ECHO_PIN_ABOVE, INPUT);
+    digitalWrite(TRIG_PIN_ABOVE, LOW);
+
 }
 
 float measureDistance(int trigPin, int echoPin)
@@ -306,6 +314,20 @@ void moveForward(int speed)
     analogWrite(ENB, speed);
 }
 
+//CHRISTIAN added
+void moveBackward(int speed)
+{
+    // Motor 1 backward
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, speed);
+
+    // Motor 2 backward
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, speed);
+}
+
 void stopMotors()
 {
     // Stop Motor 1
@@ -352,6 +374,10 @@ void turnLeft()
 
     stopMotors();
 }
+
+
+
+
 
 // ==============================
 // ==== Mapping Functions ===
@@ -608,3 +634,73 @@ void rotateToOrientation(Orientation targetOrientation)
         delay(200); // Brief pause after turning
     }
 }
+
+/*
+    if (!mappingComplete)
+    {
+        // Measure distances
+        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+        displayDistances(frontDist, leftDist, rightDist);
+
+        // Update the map based on sensor readings
+        updateMap(frontDist, leftDist, rightDist);
+
+        // Decision-making based on sensor data
+        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+        {
+            // Obstacle detected in front
+            stopMotors();
+            delay(200); // Brief pause
+
+            // Decide turn direction based on left and right distances
+            if (leftDist > rightDist)
+            {
+                turnLeft();
+                currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
+            }
+            else
+            {
+                turnRight();
+                currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
+            }
+        }
+        else
+        {
+            // No obstacle in front, move forward
+            moveForward(MOTOR_SPEED);
+            updatePosition(); // Update position after moving forward
+        }
+
+        // Small delay before next sensor measurement
+        delay(SENSOR_MEASUREMENT_INTERVAL);
+
+        // Optional: Print the grid map
+        // printGridMap();
+
+        // Check if mapping is complete
+        if (isMappingComplete())
+        {
+            mappingComplete = true;
+            stopMotors();
+            Serial.println("Mapping complete. Starting quadrant navigation.");
+        }
+    }
+    else
+    {
+        // Navigate to quadrants
+        Position target = quadrants[currentQuadrantIndex];
+        navigateTo(target);
+
+        // Wait for 10 seconds
+        Serial.print("Arrived at quadrant ");
+        Serial.println(currentQuadrantIndex + 1);
+        stopMotors();
+        delay(10000); // 10 seconds
+
+        // Move to the next quadrant
+        currentQuadrantIndex = (currentQuadrantIndex + 1) % 4;
+    }
+
+*/
