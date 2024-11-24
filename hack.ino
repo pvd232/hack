@@ -416,10 +416,6 @@ void adjustCourse(float sideDist)
     }
 }
 
-// ==============================
-// ==== New Function Definitions ===
-// ==============================
-
 void findClosestWall()
 {
     float minDistance = 9999.0;
