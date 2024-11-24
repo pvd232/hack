@@ -56,14 +56,14 @@ void displayDistances(float frontDist, float leftDist, float rightDist);
 // Define motor control pins
 const int ENA = 2; // Enable pin for Motor Left (PWM)
 const int IN1 = 3; // Direction pin 1 for Motor 1/Left (Output)
-const int IN2 = 4; // Direction pin 2 for Motor 1/Right (Input)
+const int IN2 = 4; // Direction pin 2 for Motor 1/Left (Input)
 
 const int ENB = 5; // Enable pin for Motor Right (PWM)
 const int IN3 = 6;  // Direction pin 1 for Motor 2/Right (Output)
 const int IN4 = 7;  // Direction pin 2 for Motor 2/Right (Input)
 
 // Define motor speed
-const int MOTOR_SPEED = 150; // Speed value (0-255)
+const int MOTOR_SPEED = 200; // Speed value (0-255)
 
 // Turn duration (milliseconds) - Adjust experimentally
 const unsigned long TURN_DURATION = 650; // Approximate duration for 90-degree turn
@@ -168,8 +168,25 @@ void setup()
 void loop()
 {
     //CHRISTIAN separate logic here to test follow, detect, respond functionality
+    /*while(true) {
+        float frontTest = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        float aboveTest = measureDistance(TRIG_PIN_ABOVE, ECHO_PIN_ABOVE);
+        Serial.print("Front sensor value is : " );
+        Serial.println(frontTest);
+        Serial.print("Above sensor value is : " );
+        Serial.println(aboveTest);
+        delay(2000);
+        //moveForward(MOTOR_SPEED);
+    }
+    */
+    
+    delay(5000);
     while(!fell) {
         follow();
+        int result = detect();
+        if (result) {
+            respond();
+        }
     }
 }
 
@@ -181,12 +198,6 @@ void follow() {
         moveForward(MOTOR_SPEED);
     }
     stopMotors();
-
-    int result = detect();
-
-    if (result) {
-        respond();
-    }
 }
 
 //CHRISTIAN added
@@ -196,14 +207,14 @@ int detect() {
     float frontTest, aboveTest;
 
     while (true) {
-        delay(FALL_WAIT_TIME); // time to wait for person falling
+        delay(2000); // time to wait for person falling
         frontTest = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
         aboveTest = measureDistance(TRIG_PIN_ABOVE, ECHO_PIN_ABOVE);
 
         float frontDif = frontTest - frontDist;
         float aboveDif = aboveTest - aboveDist;
 
-        if (frontDif > OBSTACLE_THRESHOLD || frontDif < (OBSTACLE_THRESHOLD * -1)) {
+        if (frontDif > OBSTACLE_THRESHOLD  || frontDif < (OBSTACLE_THRESHOLD * -1)) {
             break;
         }
         else if (aboveDif > OBSTACLE_THRESHOLD) {
