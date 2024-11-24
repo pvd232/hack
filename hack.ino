@@ -4,7 +4,7 @@
  * This sketch allows a robot to navigate a square room by finding the closest wall,
  * moving towards it, following along the walls to reach each corner, and at each corner,
  * searching for a person using ultrasonic sensors. If a person is found, the robot approaches
- * the person. If not, it proceeds to the next corner. This process repeats indefinitely.
+ * the person and rests. This process repeats indefinitely.
  */
 
 // ==============================
@@ -93,6 +93,7 @@ enum RobotState
     AT_CORNER,
     SEARCHING_FOR_PERSON,
     APPROACH_PERSON,
+    AT_PERSON,
     RESTING
 };
 
@@ -116,6 +117,7 @@ void moveAlongWall();
 void atCorner();
 void searchForPerson();
 void approachPerson();
+void atPerson();
 void rest();
 
 // ==============================
@@ -162,6 +164,9 @@ void loop()
         break;
     case APPROACH_PERSON:
         approachPerson();
+        break;
+    case AT_PERSON:
+        atPerson();
         break;
     case RESTING:
         rest();
@@ -524,15 +529,6 @@ void moveAlongWall()
 
 void atCorner()
 {
-    // Rotate 45 degrees inward
-    if (wallOnRight)
-    {
-        turn45DegreesLeft();
-    }
-    else
-    {
-        turn45DegreesRight();
-    }
     stopMotors();
     Serial.println("Arrived at corner. Starting to search for person.");
     robotState = SEARCHING_FOR_PERSON;
@@ -568,6 +564,9 @@ void searchForPerson()
     {
         Serial.println("Person detected with upward sensor!");
         robotState = APPROACH_PERSON;
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
         return;
     }
 
@@ -576,6 +575,9 @@ void searchForPerson()
     {
         Serial.println("Person detected due to sudden decrease in front distance!");
         robotState = APPROACH_PERSON;
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
         return;
     }
 
@@ -594,13 +596,14 @@ void searchForPerson()
         // Rotate back to face along the wall
         if (wallOnRight)
         {
-            turn45DegreesRight();
+            turnSlightly(true); // Turn right to original orientation
         }
         else
         {
-            turn45DegreesLeft();
+            turnSlightly(false); // Turn left to original orientation
         }
         delay(200);
+
         // Turn to follow the next wall
         if (wallOnRight)
         {
@@ -624,60 +627,23 @@ void approachPerson()
     if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
     {
         stopMotors();
-        Serial.println("Reached person.");
-        // Decide what to do after reaching the person
-        // For now, we can proceed to the next corner
-
-        // Reset search variables
-        searchTurnSteps = 0;
-        previousFrontDist = -1.0;
-
-        // Rotate back to face along the wall
-        if (wallOnRight)
-        {
-            turn45DegreesRight();
-        }
-        else
-        {
-            turn45DegreesLeft();
-        }
-        delay(200);
-        // Turn to follow the next wall
-        if (wallOnRight)
-        {
-            turnRight();
-        }
-        else
-        {
-            turnLeft();
-        }
-        delay(200);
-        robotState = MOVE_ALONG_WALL;
+        Serial.println("Reached person. Stopping and resting.");
+        robotState = AT_PERSON;
     }
+}
+
+void atPerson()
+{
+    // Robot has reached the person and is resting
+    // You can implement your tracking function here
+
+    // For demonstration, we'll have the robot rest indefinitely
+    // If you want to proceed after a delay, you can implement a timer here
+    // For now, we just stay in this state
 }
 
 void rest()
 {
-    // Since we don't need to rest, we can proceed immediately
-    // Rotate back to face along the wall
-    if (wallOnRight)
-    {
-        turn45DegreesRight();
-    }
-    else
-    {
-        turn45DegreesLeft();
-    }
-    delay(200);
-    // Turn to follow the next wall
-    if (wallOnRight)
-    {
-        turnRight();
-    }
-    else
-    {
-        turnLeft();
-    }
-    delay(200);
-    robotState = MOVE_ALONG_WALL;
+    // Since we don't need to rest in this context, we can proceed immediately
+    // This function can be modified or removed if not needed
 }
