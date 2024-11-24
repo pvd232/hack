@@ -32,7 +32,7 @@ const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
 const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 
 // Obstacle detection threshold (centimeters)
-const float OBSTACLE_THRESHOLD = 20.0;
+const float OBSTACLE_THRESHOLD = 60.0;
 
 // Desired distance from the wall for wall-following (centimeters)
 const float DESIRED_WALL_DISTANCE = 15.0;
@@ -61,7 +61,7 @@ const int IN3 = 6; // Direction pin 1 for Motor 2
 const int IN4 = 7; // Direction pin 2 for Motor 2
 
 // Define motor speed
-const int MOTOR_SPEED = 150; // Speed value (0-255)
+const int MOTOR_SPEED = 300; // Speed value (0-255)
 
 // Turn duration (milliseconds) - Adjust experimentally
 const unsigned long TURN_DURATION = 650;                  // Approximate duration for 90-degree turn
