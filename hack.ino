@@ -1,12 +1,10 @@
 /*
- * Autonomous Navigation Robot with Ultrasonic Sensors and Mapping
+ * Autonomous Navigation Robot with Ultrasonic Sensors
  *
- * This sketch allows a robot to navigate a room by moving forward until it
- * detects an obstacle, then turning to avoid it using front, left, and right
- * ultrasonic sensors. It also creates a simple grid map of the environment.
- *
- * After mapping, the robot navigates to different quadrants of the room,
- * rests for 10 seconds at each, and continues the cycle.
+ * This sketch allows a robot to navigate a square room by finding the closest wall,
+ * moving towards it, following along the walls to reach each corner, and at each corner,
+ * searching for a person using ultrasonic sensors. If a person is found, the robot approaches
+ * the person. If not, it proceeds to the next corner. This process repeats indefinitely.
  */
 
 // ==============================
@@ -23,6 +21,10 @@ const int ECHO_PIN_LEFT = 14;
 const int TRIG_PIN_RIGHT = 15;
 const int ECHO_PIN_RIGHT = 16;
 
+// Additional Ultrasonic Sensor (Upward Facing)
+const int TRIG_PIN_UP = 17; // Assign appropriate pins
+const int ECHO_PIN_UP = 18;
+
 // Constants for distance calculation
 const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
 const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
@@ -30,8 +32,17 @@ const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 // Obstacle detection threshold (centimeters)
 const float OBSTACLE_THRESHOLD = 20.0;
 
+// Desired distance from the wall for wall-following (centimeters)
+const float DESIRED_WALL_DISTANCE = 15.0;
+
 // Measurement interval (milliseconds)
 const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
+
+// Constants for person detection
+const float UPWARD_SENSOR_THRESHOLD = 150.0;        // Adjust based on expected person height/distance
+const float SUDDEN_CHANGE_THRESHOLD = 30.0;         // Adjust based on expected change in front sensor
+const int MAX_SEARCH_TURN_STEPS = 8;                // Adjust as necessary
+const unsigned long TURN_SLIGHT_DURATION = 650 / 9; // Approximate duration for small turns
 
 // Function Prototypes for Ultrasonic Sensors
 void setupUltrasonicSensors();
@@ -55,7 +66,8 @@ const int IN4 = 6;  // Direction pin 2 for Motor 2
 const int MOTOR_SPEED = 150; // Speed value (0-255)
 
 // Turn duration (milliseconds) - Adjust experimentally
-const unsigned long TURN_DURATION = 650; // Approximate duration for 90-degree turn
+const unsigned long TURN_DURATION = 650;                  // Approximate duration for 90-degree turn
+const unsigned long TURN_45_DURATION = TURN_DURATION / 2; // Approximate duration for 45-degree turn
 
 // Function Prototypes for Motor Control
 void setupMotorPins();
@@ -63,54 +75,48 @@ void moveForward(int speed);
 void stopMotors();
 void turnRight();
 void turnLeft();
-
-// ==============================
-// ======= Mapping Setup ===
-// ==============================
-
-const int GRID_SIZE = 20;           // Adjust based on room size and resolution
-byte gridMap[GRID_SIZE][GRID_SIZE]; // 0: Unknown, 1: Free, 2: Obstacle
-
-// Robot's current position and orientation
-int posX = GRID_SIZE / 2;
-int posY = GRID_SIZE / 2;
-enum Orientation
-{
-    NORTH,
-    EAST,
-    SOUTH,
-    WEST
-};
-Orientation currentOrientation = NORTH;
-
-// Function Prototypes for Mapping
-void updateMap(float frontDist, float leftDist, float rightDist);
-void updatePosition();
-void printGridMap();
+void turn45DegreesRight();
+void turn45DegreesLeft();
+void turnSlightly(bool turnRight);
+void adjustCourse(float sideDist);
 
 // ==============================
 // ==== New Functionality Setup ===
 // ==============================
 
-// Flag to indicate if mapping is complete
-bool mappingComplete = false;
-
-// Define quadrant positions
-struct Position
+enum RobotState
 {
-    int x;
-    int y;
+    FIND_CLOSEST_WALL,
+    MOVE_TOWARD_WALL,
+    TURN_ALONG_WALL,
+    MOVE_ALONG_WALL,
+    AT_CORNER,
+    SEARCHING_FOR_PERSON,
+    APPROACH_PERSON,
+    RESTING
 };
 
-Position quadrants[4];
+RobotState robotState = FIND_CLOSEST_WALL;
 
-// Index of the current quadrant to visit
-int currentQuadrantIndex = 0;
+// For rest timing
+unsigned long restStartTime = 0;
+
+// Variable to determine which side to follow (left or right)
+bool wallOnRight = true;
+
+// Variables for searching for person
+int searchTurnSteps = 0;
+float previousFrontDist = -1.0;
 
 // Function Prototypes for new functionalities
-bool isMappingComplete();
-void navigateTo(Position target);
-void rotateToOrientation(Orientation targetOrientation);
+void findClosestWall();
+void moveForwardUntilObstacle();
+void turnAlongWall();
+void moveAlongWall();
+void atCorner();
+void searchForPerson();
+void approachPerson();
+void rest();
 
 // ==============================
 // ========= Setup Function ======
@@ -126,24 +132,6 @@ void setup()
 
     // Initialize Motor Control
     setupMotorPins();
-
-    // Initialize Grid Map
-    for (int i = 0; i < GRID_SIZE; i++)
-    {
-        for (int j = 0; j < GRID_SIZE; j++)
-        {
-            gridMap[i][j] = 0; // Unknown
-        }
-    }
-
-    // Mark starting position as free space
-    gridMap[posX][posY] = 1; // Free
-
-    // Initialize Quadrant Positions
-    quadrants[0] = {GRID_SIZE / 4, GRID_SIZE / 4};         // Top-left quadrant
-    quadrants[1] = {3 * GRID_SIZE / 4, GRID_SIZE / 4};     // Top-right quadrant
-    quadrants[2] = {3 * GRID_SIZE / 4, 3 * GRID_SIZE / 4}; // Bottom-right quadrant
-    quadrants[3] = {GRID_SIZE / 4, 3 * GRID_SIZE / 4};     // Bottom-left quadrant
 }
 
 // ==============================
@@ -152,71 +140,32 @@ void setup()
 
 void loop()
 {
-    if (!mappingComplete)
+    switch (robotState)
     {
-        // Measure distances
-        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
-        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
-        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
-        displayDistances(frontDist, leftDist, rightDist);
-
-        // Update the map based on sensor readings
-        updateMap(frontDist, leftDist, rightDist);
-
-        // Decision-making based on sensor data
-        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
-        {
-            // Obstacle detected in front
-            stopMotors();
-            delay(200); // Brief pause
-
-            // Decide turn direction based on left and right distances
-            if (leftDist > rightDist)
-            {
-                turnLeft();
-                currentOrientation = (Orientation)((currentOrientation + 3) % 4); // Turned left
-            }
-            else
-            {
-                turnRight();
-                currentOrientation = (Orientation)((currentOrientation + 1) % 4); // Turned right
-            }
-        }
-        else
-        {
-            // No obstacle in front, move forward
-            moveForward(MOTOR_SPEED);
-            updatePosition(); // Update position after moving forward
-        }
-
-        // Small delay before next sensor measurement
-        delay(SENSOR_MEASUREMENT_INTERVAL);
-
-        // Optional: Print the grid map
-        // printGridMap();
-
-        // Check if mapping is complete
-        if (isMappingComplete())
-        {
-            mappingComplete = true;
-            stopMotors();
-            Serial.println("Mapping complete. Starting quadrant navigation.");
-        }
-    }
-    else
-    {
-        // Navigate to quadrants
-        Position target = quadrants[currentQuadrantIndex];
-        navigateTo(target);
-
-        // Wait for 10 seconds
-        Serial.print("Arrived at quadrant ");
-        Serial.println(currentQuadrantIndex + 1);
-        stopMotors();
-        delay(10000); // 10 seconds
-
-        // Move to the next quadrant
-        currentQuadrantIndex = (currentQuadrantIndex + 1) % 4;
+    case FIND_CLOSEST_WALL:
+        findClosestWall();
+        break;
+    case MOVE_TOWARD_WALL:
+        moveForwardUntilObstacle();
+        break;
+    case TURN_ALONG_WALL:
+        turnAlongWall();
+        break;
+    case MOVE_ALONG_WALL:
+        moveAlongWall();
+        break;
+    case AT_CORNER:
+        atCorner();
+        break;
+    case SEARCHING_FOR_PERSON:
+        searchForPerson();
+        break;
+    case APPROACH_PERSON:
+        approachPerson();
+        break;
+    case RESTING:
+        rest();
+        break;
     }
 }
 
@@ -240,6 +189,11 @@ void setupUltrasonicSensors()
     pinMode(TRIG_PIN_RIGHT, OUTPUT);
     pinMode(ECHO_PIN_RIGHT, INPUT);
     digitalWrite(TRIG_PIN_RIGHT, LOW);
+
+    // Upward-facing sensor
+    pinMode(TRIG_PIN_UP, OUTPUT);
+    pinMode(ECHO_PIN_UP, INPUT);
+    digitalWrite(TRIG_PIN_UP, LOW);
 }
 
 float measureDistance(int trigPin, int echoPin)
@@ -353,258 +307,377 @@ void turnLeft()
     stopMotors();
 }
 
-// ==============================
-// ==== Mapping Functions ===
-// ==============================
-
-void updateMap(float frontDist, float leftDist, float rightDist)
+void turn45DegreesRight()
 {
-    // Grid cell size in cm
-    const float CELL_SIZE = 20.0;
+    // Motor 1 forward
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, MOTOR_SPEED);
 
-    // Mark the cell in front
-    if (frontDist > 0 && frontDist <= OBSTACLE_THRESHOLD)
-    {
-        int cellAheadX = posX;
-        int cellAheadY = posY;
+    // Motor 2 backward
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, MOTOR_SPEED);
 
-        switch (currentOrientation)
-        {
-        case NORTH:
-            cellAheadY -= 1;
-            break;
-        case EAST:
-            cellAheadX += 1;
-            break;
-        case SOUTH:
-            cellAheadY += 1;
-            break;
-        case WEST:
-            cellAheadX -= 1;
-            break;
-        }
+    delay(TURN_45_DURATION); // Adjust experimentally
 
-        if (cellAheadX >= 0 && cellAheadX < GRID_SIZE && cellAheadY >= 0 && cellAheadY < GRID_SIZE)
-        {
-            gridMap[cellAheadX][cellAheadY] = 2; // Obstacle
-        }
-    }
-
-    // Similarly, mark the cells to the left and right
-    // Left
-    if (leftDist > 0 && leftDist <= OBSTACLE_THRESHOLD)
-    {
-        int cellLeftX = posX;
-        int cellLeftY = posY;
-
-        switch (currentOrientation)
-        {
-        case NORTH:
-            cellLeftX -= 1;
-            break;
-        case EAST:
-            cellLeftY -= 1;
-            break;
-        case SOUTH:
-            cellLeftX += 1;
-            break;
-        case WEST:
-            cellLeftY += 1;
-            break;
-        }
-
-        if (cellLeftX >= 0 && cellLeftX < GRID_SIZE && cellLeftY >= 0 && cellLeftY < GRID_SIZE)
-        {
-            gridMap[cellLeftX][cellLeftY] = 2; // Obstacle
-        }
-    }
-
-    // Right
-    if (rightDist > 0 && rightDist <= OBSTACLE_THRESHOLD)
-    {
-        int cellRightX = posX;
-        int cellRightY = posY;
-
-        switch (currentOrientation)
-        {
-        case NORTH:
-            cellRightX += 1;
-            break;
-        case EAST:
-            cellRightY += 1;
-            break;
-        case SOUTH:
-            cellRightX -= 1;
-            break;
-        case WEST:
-            cellRightY -= 1;
-            break;
-        }
-
-        if (cellRightX >= 0 && cellRightX < GRID_SIZE && cellRightY >= 0 && cellRightY < GRID_SIZE)
-        {
-            gridMap[cellRightX][cellRightY] = 2; // Obstacle
-        }
-    }
-
-    // Mark current position as free space
-    gridMap[posX][posY] = 1; // Free
+    stopMotors();
 }
 
-void updatePosition()
+void turn45DegreesLeft()
 {
-    // Since we don't have encoders, we'll assume that each forward movement moves one cell
-    switch (currentOrientation)
-    {
-    case NORTH:
-        if (posY > 0)
-            posY -= 1;
-        break;
-    case EAST:
-        if (posX < GRID_SIZE - 1)
-            posX += 1;
-        break;
-    case SOUTH:
-        if (posY < GRID_SIZE - 1)
-            posY += 1;
-        break;
-    case WEST:
-        if (posX > 0)
-            posX -= 1;
-        break;
-    }
+    // Motor 1 backward
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, MOTOR_SPEED);
 
-    // Mark new position as free space
-    gridMap[posX][posY] = 1; // Free
+    // Motor 2 forward
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, MOTOR_SPEED);
 
-    // Move for a fixed duration to simulate moving one cell
-    // Only delay during mapping to avoid unnecessary pauses during navigation
-    if (!mappingComplete)
-    {
-        delay(1000); // Adjust duration as needed
-    }
+    delay(TURN_45_DURATION); // Adjust experimentally
+
+    stopMotors();
 }
 
-void printGridMap()
+void turnSlightly(bool turnRightDirection)
 {
-    for (int y = 0; y < GRID_SIZE; y++)
+    if (turnRightDirection)
     {
-        for (int x = 0; x < GRID_SIZE; x++)
-        {
-            if (x == posX && y == posY)
-            {
-                Serial.print("R "); // Robot's current position
-            }
-            else
-            {
-                Serial.print(gridMap[x][y]);
-                Serial.print(" ");
-            }
-        }
-        Serial.println();
+        // Motor 1 forward
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, LOW);
+        analogWrite(ENA, MOTOR_SPEED);
+
+        // Motor 2 backward
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, HIGH);
+        analogWrite(ENB, MOTOR_SPEED);
     }
-    Serial.println("---------------------------");
+    else
+    {
+        // Motor 1 backward
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, HIGH);
+        analogWrite(ENA, MOTOR_SPEED);
+
+        // Motor 2 forward
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, LOW);
+        analogWrite(ENB, MOTOR_SPEED);
+    }
+
+    delay(TURN_SLIGHT_DURATION); // Adjust experimentally
+
+    stopMotors();
+}
+
+// Adjust the robot's course based on side distance
+void adjustCourse(float sideDist)
+{
+    const int adjustmentSpeed = 50; // Adjust as necessary
+
+    if (sideDist > DESIRED_WALL_DISTANCE + 5)
+    {
+        // Too far from wall, adjust towards wall
+        if (wallOnRight)
+        {
+            // Turn slightly right
+            analogWrite(ENA, MOTOR_SPEED + adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED - adjustmentSpeed);
+        }
+        else
+        {
+            // Turn slightly left
+            analogWrite(ENA, MOTOR_SPEED - adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED + adjustmentSpeed);
+        }
+    }
+    else if (sideDist > 0 && sideDist < DESIRED_WALL_DISTANCE - 5)
+    {
+        // Too close to wall, adjust away from wall
+        if (wallOnRight)
+        {
+            // Turn slightly left
+            analogWrite(ENA, MOTOR_SPEED - adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED + adjustmentSpeed);
+        }
+        else
+        {
+            // Turn slightly right
+            analogWrite(ENA, MOTOR_SPEED + adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED - adjustmentSpeed);
+        }
+    }
+    else
+    {
+        // Move straight
+        moveForward(MOTOR_SPEED);
+    }
 }
 
 // ==============================
 // ==== New Function Definitions ===
 // ==============================
 
-/**
- * @brief Checks if all accessible cells have been visited.
- *
- * @return true if mapping is complete, false otherwise.
- */
-bool isMappingComplete()
+void findClosestWall()
 {
-    for (int i = 0; i < GRID_SIZE; i++)
+    float minDistance = 9999.0;
+    int minSteps = 0;
+
+    // Rotate 360 degrees in 45-degree increments
+    for (int i = 0; i < 8; i++)
     {
-        for (int j = 0; j < GRID_SIZE; j++)
+        float dist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+        Serial.print("Distance at step ");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.print(dist);
+        Serial.println(" cm");
+
+        if (dist > 0 && dist < minDistance)
         {
-            // If there is any unknown (0) cell adjacent to a free space (1), mapping is not complete
-            if (gridMap[i][j] == 0)
-            {
-                // Check if this unknown cell is adjacent to a free space
-                if ((i > 0 && gridMap[i - 1][j] == 1) ||
-                    (i < GRID_SIZE - 1 && gridMap[i + 1][j] == 1) ||
-                    (j > 0 && gridMap[i][j - 1] == 1) ||
-                    (j < GRID_SIZE - 1 && gridMap[i][j + 1] == 1))
-                {
-                    return false; // Still areas to explore
-                }
-            }
+            minDistance = dist;
+            minSteps = i;
         }
+
+        turn45DegreesRight();
+        delay(200); // Small delay after turning
     }
-    return true; // All accessible areas have been explored
+
+    // Rotate back to the orientation with the minimum distance
+    int stepsToRotateBack = (8 - minSteps) % 8;
+
+    for (int i = 0; i < stepsToRotateBack; i++)
+    {
+        turn45DegreesRight();
+        delay(200);
+    }
+
+    // Determine which side the wall is on for wall following
+    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+
+    if (leftDist > 0 && (leftDist < rightDist || rightDist < 0))
+    {
+        wallOnRight = false; // Follow wall on left side
+        Serial.println("Following wall on left side.");
+    }
+    else
+    {
+        wallOnRight = true; // Follow wall on right side
+        Serial.println("Following wall on right side.");
+    }
+
+    robotState = MOVE_TOWARD_WALL;
 }
 
-/**
- * @brief Navigates the robot to the target grid position.
- *
- * @param target The target position to navigate to.
- */
-void navigateTo(Position target)
+void moveForwardUntilObstacle()
 {
-    // Simplified navigation: Move in grid steps towards the target
-    while (posX != target.x || posY != target.y)
+    moveForward(MOTOR_SPEED);
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+
+    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
     {
-        // Determine the direction to move in X axis
-        if (posX < target.x)
-        {
-            rotateToOrientation(EAST);
-            moveForward(MOTOR_SPEED);
-            updatePosition();
-        }
-        else if (posX > target.x)
-        {
-            rotateToOrientation(WEST);
-            moveForward(MOTOR_SPEED);
-            updatePosition();
-        }
-        // Determine the direction to move in Y axis
-        else if (posY < target.y)
-        {
-            rotateToOrientation(SOUTH);
-            moveForward(MOTOR_SPEED);
-            updatePosition();
-        }
-        else if (posY > target.y)
-        {
-            rotateToOrientation(NORTH);
-            moveForward(MOTOR_SPEED);
-            updatePosition();
-        }
-
-        // Add obstacle avoidance during navigation
-        float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
-        if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
-        {
-            // Obstacle detected, need to avoid
-            stopMotors();
-            delay(200);
-            // Try to turn and bypass the obstacle
-            turnRight();
-            currentOrientation = (Orientation)((currentOrientation + 1) % 4);
-        }
-
-        // Update the map with new sensor readings
-        float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
-        float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
-        updateMap(frontDist, leftDist, rightDist);
+        stopMotors();
+        robotState = TURN_ALONG_WALL;
     }
 }
 
-/**
- * @brief Rotates the robot to face the target orientation.
- *
- * @param targetOrientation The orientation to rotate to.
- */
-void rotateToOrientation(Orientation targetOrientation)
+void turnAlongWall()
 {
-    while (currentOrientation != targetOrientation)
+    // Turn towards the wall to align along it
+    if (wallOnRight)
     {
         turnRight();
-        currentOrientation = (Orientation)((currentOrientation + 1) % 4);
-        delay(200); // Brief pause after turning
     }
+    else
+    {
+        turnLeft();
+    }
+    delay(200);
+    robotState = MOVE_ALONG_WALL;
+}
+
+void moveAlongWall()
+{
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+    float sideDist = wallOnRight ? rightDist : leftDist;
+
+    displayDistances(frontDist, leftDist, rightDist);
+
+    // Adjust course to follow wall
+    adjustCourse(sideDist);
+
+    // Check for corner: walls on front and side
+    if ((frontDist > 0 && frontDist < OBSTACLE_THRESHOLD) && (sideDist > 0 && sideDist < OBSTACLE_THRESHOLD))
+    {
+        stopMotors();
+        robotState = AT_CORNER;
+    }
+
+    delay(SENSOR_MEASUREMENT_INTERVAL);
+}
+
+void atCorner()
+{
+    // Rotate 45 degrees inward
+    if (wallOnRight)
+    {
+        turn45DegreesLeft();
+    }
+    else
+    {
+        turn45DegreesRight();
+    }
+    stopMotors();
+    Serial.println("Arrived at corner. Starting to search for person.");
+    robotState = SEARCHING_FOR_PERSON;
+}
+
+void searchForPerson()
+{
+    // Initialize variables at the start
+    if (searchTurnSteps == 0)
+    {
+        previousFrontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    }
+
+    // Turn slightly inward
+    if (wallOnRight)
+    {
+        turnSlightly(false); // Turn left
+    }
+    else
+    {
+        turnSlightly(true); // Turn right
+    }
+
+    searchTurnSteps++;
+
+    // Measure distances
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float upwardDist = measureDistance(TRIG_PIN_UP, ECHO_PIN_UP);
+    float sideDist = wallOnRight ? measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT) : measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+
+    // Check for upward sensor detection
+    if (upwardDist > 0 && upwardDist < UPWARD_SENSOR_THRESHOLD)
+    {
+        Serial.println("Person detected with upward sensor!");
+        robotState = APPROACH_PERSON;
+        return;
+    }
+
+    // Check for sudden decrease in front sensor reading
+    if (previousFrontDist > 0 && frontDist > 0 && (previousFrontDist - frontDist) > SUDDEN_CHANGE_THRESHOLD)
+    {
+        Serial.println("Person detected due to sudden decrease in front distance!");
+        robotState = APPROACH_PERSON;
+        return;
+    }
+
+    // Update previous front distance
+    previousFrontDist = frontDist;
+
+    // Check if we have reached the other side of the corner
+    if (searchTurnSteps >= MAX_SEARCH_TURN_STEPS)
+    {
+        // Did not find a person, proceed to next corner
+        Serial.println("Person not found, proceeding to next corner.");
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
+
+        // Rotate back to face along the wall
+        if (wallOnRight)
+        {
+            turn45DegreesRight();
+        }
+        else
+        {
+            turn45DegreesLeft();
+        }
+        delay(200);
+        // Turn to follow the next wall
+        if (wallOnRight)
+        {
+            turnRight();
+        }
+        else
+        {
+            turnLeft();
+        }
+        delay(200);
+        robotState = MOVE_ALONG_WALL;
+        return;
+    }
+}
+
+void approachPerson()
+{
+    moveForward(MOTOR_SPEED);
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+
+    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+    {
+        stopMotors();
+        Serial.println("Reached person.");
+        // Decide what to do after reaching the person
+        // For now, we can proceed to the next corner
+
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
+
+        // Rotate back to face along the wall
+        if (wallOnRight)
+        {
+            turn45DegreesRight();
+        }
+        else
+        {
+            turn45DegreesLeft();
+        }
+        delay(200);
+        // Turn to follow the next wall
+        if (wallOnRight)
+        {
+            turnRight();
+        }
+        else
+        {
+            turnLeft();
+        }
+        delay(200);
+        robotState = MOVE_ALONG_WALL;
+    }
+}
+
+void rest()
+{
+    // Since we don't need to rest, we can proceed immediately
+    // Rotate back to face along the wall
+    if (wallOnRight)
+    {
+        turn45DegreesRight();
+    }
+    else
+    {
+        turn45DegreesLeft();
+    }
+    delay(200);
+    // Turn to follow the next wall
+    if (wallOnRight)
+    {
+        turnRight();
+    }
+    else
+    {
+        turnLeft();
+    }
+    delay(200);
+    robotState = MOVE_ALONG_WALL;
 }
