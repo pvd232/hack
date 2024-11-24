@@ -28,6 +28,9 @@ const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
 // Obstacle detection threshold (centimeters)
 const float OBSTACLE_THRESHOLD = 20.0;
 
+// Desired distance from the wall for wall-following (centimeters)
+const float DESIRED_WALL_DISTANCE = 15.0;
+
 // Measurement interval (milliseconds)
 const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
 
@@ -64,6 +67,7 @@ void turnRight();
 void turnLeft();
 void turn45DegreesRight();
 void turn45DegreesLeft();
+void adjustCourse(float sideDist);
 
 // ==============================
 // ==== New Functionality Setup ===
@@ -83,6 +87,9 @@ RobotState robotState = FIND_CLOSEST_WALL;
 
 // For rest timing
 unsigned long restStartTime = 0;
+
+// Variable to determine which side to follow (left or right)
+bool wallOnRight = true;
 
 // Function Prototypes for new functionalities
 void findClosestWall();
@@ -304,6 +311,50 @@ void turn45DegreesLeft()
     stopMotors();
 }
 
+// Adjust the robot's course based on side distance
+void adjustCourse(float sideDist)
+{
+    const int adjustmentSpeed = 50; // Adjust as necessary
+
+    if (sideDist > DESIRED_WALL_DISTANCE + 5)
+    {
+        // Too far from wall, adjust towards wall
+        if (wallOnRight)
+        {
+            // Turn slightly right
+            analogWrite(ENA, MOTOR_SPEED + adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED - adjustmentSpeed);
+        }
+        else
+        {
+            // Turn slightly left
+            analogWrite(ENA, MOTOR_SPEED - adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED + adjustmentSpeed);
+        }
+    }
+    else if (sideDist > 0 && sideDist < DESIRED_WALL_DISTANCE - 5)
+    {
+        // Too close to wall, adjust away from wall
+        if (wallOnRight)
+        {
+            // Turn slightly left
+            analogWrite(ENA, MOTOR_SPEED - adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED + adjustmentSpeed);
+        }
+        else
+        {
+            // Turn slightly right
+            analogWrite(ENA, MOTOR_SPEED + adjustmentSpeed);
+            analogWrite(ENB, MOTOR_SPEED - adjustmentSpeed);
+        }
+    }
+    else
+    {
+        // Move straight
+        moveForward(MOTOR_SPEED);
+    }
+}
+
 // ==============================
 // ==== New Function Definitions ===
 // ==============================
@@ -342,6 +393,21 @@ void findClosestWall()
         delay(200);
     }
 
+    // Determine which side the wall is on for wall following
+    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+
+    if (leftDist > 0 && (leftDist < rightDist || rightDist < 0))
+    {
+        wallOnRight = false; // Follow wall on left side
+        Serial.println("Following wall on left side.");
+    }
+    else
+    {
+        wallOnRight = true; // Follow wall on right side
+        Serial.println("Following wall on right side.");
+    }
+
     robotState = MOVE_TOWARD_WALL;
 }
 
@@ -359,28 +425,52 @@ void moveForwardUntilObstacle()
 
 void turnAlongWall()
 {
-    // For simplicity, always turn right
-    turnRight();
+    // Turn towards the wall to align along it
+    if (wallOnRight)
+    {
+        turnRight();
+    }
+    else
+    {
+        turnLeft();
+    }
     delay(200);
     robotState = MOVE_ALONG_WALL;
 }
 
 void moveAlongWall()
 {
-    moveForward(MOTOR_SPEED);
     float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float leftDist = measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+    float rightDist = measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT);
+    float sideDist = wallOnRight ? rightDist : leftDist;
 
-    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+    displayDistances(frontDist, leftDist, rightDist);
+
+    // Adjust course to follow wall
+    adjustCourse(sideDist);
+
+    // Check for corner: walls on front and side
+    if ((frontDist > 0 && frontDist < OBSTACLE_THRESHOLD) && (sideDist > 0 && sideDist < OBSTACLE_THRESHOLD))
     {
         stopMotors();
         robotState = AT_CORNER;
     }
+
+    delay(SENSOR_MEASUREMENT_INTERVAL);
 }
 
 void atCorner()
 {
     // Rotate 45 degrees inward
-    turn45DegreesLeft();
+    if (wallOnRight)
+    {
+        turn45DegreesLeft();
+    }
+    else
+    {
+        turn45DegreesRight();
+    }
     stopMotors();
     Serial.println("Arrived at corner. Resting for 10 seconds.");
     restStartTime = millis();
@@ -393,10 +483,24 @@ void rest()
     {
         // Rest is over
         // Rotate back to face along the wall
-        turn45DegreesRight();
+        if (wallOnRight)
+        {
+            turn45DegreesRight();
+        }
+        else
+        {
+            turn45DegreesLeft();
+        }
         delay(200);
-        // Turn right to face along the next wall
-        turnRight();
+        // Turn to follow the next wall
+        if (wallOnRight)
+        {
+            turnRight();
+        }
+        else
+        {
+            turnLeft();
+        }
         delay(200);
         robotState = MOVE_ALONG_WALL;
     }
