@@ -3,8 +3,8 @@
  *
  * This sketch allows a robot to navigate a square room by finding the closest wall,
  * moving towards it, following along the walls to reach each corner, and at each corner,
- * rotating inward toward the center of the room, resting for 10 seconds, then proceeding
- * to the next corner. This process repeats indefinitely.
+ * searching for a person using ultrasonic sensors. If a person is found, the robot approaches
+ * the person. If not, it proceeds to the next corner. This process repeats indefinitely.
  */
 
 // ==============================
@@ -21,6 +21,10 @@ const int ECHO_PIN_LEFT = 14;
 const int TRIG_PIN_RIGHT = 15;
 const int ECHO_PIN_RIGHT = 16;
 
+// Additional Ultrasonic Sensor (Upward Facing)
+const int TRIG_PIN_UP = 17; // Assign appropriate pins
+const int ECHO_PIN_UP = 18;
+
 // Constants for distance calculation
 const float SOUND_SPEED = 0.0343;           // cm/us (speed of sound at 20°C)
 const unsigned long SENSOR_TIMEOUT = 30000; // 30ms timeout for echo
@@ -33,6 +37,12 @@ const float DESIRED_WALL_DISTANCE = 15.0;
 
 // Measurement interval (milliseconds)
 const unsigned long SENSOR_MEASUREMENT_INTERVAL = 100;
+
+// Constants for person detection
+const float UPWARD_SENSOR_THRESHOLD = 150.0;        // Adjust based on expected person height/distance
+const float SUDDEN_CHANGE_THRESHOLD = 30.0;         // Adjust based on expected change in front sensor
+const int MAX_SEARCH_TURN_STEPS = 8;                // Adjust as necessary
+const unsigned long TURN_SLIGHT_DURATION = 650 / 9; // Approximate duration for small turns
 
 // Function Prototypes for Ultrasonic Sensors
 void setupUltrasonicSensors();
@@ -67,6 +77,7 @@ void turnRight();
 void turnLeft();
 void turn45DegreesRight();
 void turn45DegreesLeft();
+void turnSlightly(bool turnRight);
 void adjustCourse(float sideDist);
 
 // ==============================
@@ -80,6 +91,8 @@ enum RobotState
     TURN_ALONG_WALL,
     MOVE_ALONG_WALL,
     AT_CORNER,
+    SEARCHING_FOR_PERSON,
+    APPROACH_PERSON,
     RESTING
 };
 
@@ -91,12 +104,18 @@ unsigned long restStartTime = 0;
 // Variable to determine which side to follow (left or right)
 bool wallOnRight = true;
 
+// Variables for searching for person
+int searchTurnSteps = 0;
+float previousFrontDist = -1.0;
+
 // Function Prototypes for new functionalities
 void findClosestWall();
 void moveForwardUntilObstacle();
 void turnAlongWall();
 void moveAlongWall();
 void atCorner();
+void searchForPerson();
+void approachPerson();
 void rest();
 
 // ==============================
@@ -138,6 +157,12 @@ void loop()
     case AT_CORNER:
         atCorner();
         break;
+    case SEARCHING_FOR_PERSON:
+        searchForPerson();
+        break;
+    case APPROACH_PERSON:
+        approachPerson();
+        break;
     case RESTING:
         rest();
         break;
@@ -164,6 +189,11 @@ void setupUltrasonicSensors()
     pinMode(TRIG_PIN_RIGHT, OUTPUT);
     pinMode(ECHO_PIN_RIGHT, INPUT);
     digitalWrite(TRIG_PIN_RIGHT, LOW);
+
+    // Upward-facing sensor
+    pinMode(TRIG_PIN_UP, OUTPUT);
+    pinMode(ECHO_PIN_UP, INPUT);
+    digitalWrite(TRIG_PIN_UP, LOW);
 }
 
 float measureDistance(int trigPin, int echoPin)
@@ -307,6 +337,38 @@ void turn45DegreesLeft()
     analogWrite(ENB, MOTOR_SPEED);
 
     delay(TURN_45_DURATION); // Adjust experimentally
+
+    stopMotors();
+}
+
+void turnSlightly(bool turnRightDirection)
+{
+    if (turnRightDirection)
+    {
+        // Motor 1 forward
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, LOW);
+        analogWrite(ENA, MOTOR_SPEED);
+
+        // Motor 2 backward
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, HIGH);
+        analogWrite(ENB, MOTOR_SPEED);
+    }
+    else
+    {
+        // Motor 1 backward
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, HIGH);
+        analogWrite(ENA, MOTOR_SPEED);
+
+        // Motor 2 forward
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, LOW);
+        analogWrite(ENB, MOTOR_SPEED);
+    }
+
+    delay(TURN_SLIGHT_DURATION); // Adjust experimentally
 
     stopMotors();
 }
@@ -472,16 +534,104 @@ void atCorner()
         turn45DegreesRight();
     }
     stopMotors();
-    Serial.println("Arrived at corner. Resting for 10 seconds.");
-    restStartTime = millis();
-    robotState = RESTING;
+    Serial.println("Arrived at corner. Starting to search for person.");
+    robotState = SEARCHING_FOR_PERSON;
 }
 
-void rest()
+void searchForPerson()
 {
-    if (millis() - restStartTime >= 10000) // Rest for 10 seconds
+    // Initialize variables at the start
+    if (searchTurnSteps == 0)
     {
-        // Rest is over
+        previousFrontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    }
+
+    // Turn slightly inward
+    if (wallOnRight)
+    {
+        turnSlightly(false); // Turn left
+    }
+    else
+    {
+        turnSlightly(true); // Turn right
+    }
+
+    searchTurnSteps++;
+
+    // Measure distances
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+    float upwardDist = measureDistance(TRIG_PIN_UP, ECHO_PIN_UP);
+    float sideDist = wallOnRight ? measureDistance(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT) : measureDistance(TRIG_PIN_LEFT, ECHO_PIN_LEFT);
+
+    // Check for upward sensor detection
+    if (upwardDist > 0 && upwardDist < UPWARD_SENSOR_THRESHOLD)
+    {
+        Serial.println("Person detected with upward sensor!");
+        robotState = APPROACH_PERSON;
+        return;
+    }
+
+    // Check for sudden decrease in front sensor reading
+    if (previousFrontDist > 0 && frontDist > 0 && (previousFrontDist - frontDist) > SUDDEN_CHANGE_THRESHOLD)
+    {
+        Serial.println("Person detected due to sudden decrease in front distance!");
+        robotState = APPROACH_PERSON;
+        return;
+    }
+
+    // Update previous front distance
+    previousFrontDist = frontDist;
+
+    // Check if we have reached the other side of the corner
+    if (searchTurnSteps >= MAX_SEARCH_TURN_STEPS)
+    {
+        // Did not find a person, proceed to next corner
+        Serial.println("Person not found, proceeding to next corner.");
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
+
+        // Rotate back to face along the wall
+        if (wallOnRight)
+        {
+            turn45DegreesRight();
+        }
+        else
+        {
+            turn45DegreesLeft();
+        }
+        delay(200);
+        // Turn to follow the next wall
+        if (wallOnRight)
+        {
+            turnRight();
+        }
+        else
+        {
+            turnLeft();
+        }
+        delay(200);
+        robotState = MOVE_ALONG_WALL;
+        return;
+    }
+}
+
+void approachPerson()
+{
+    moveForward(MOTOR_SPEED);
+    float frontDist = measureDistance(TRIG_PIN_FRONT, ECHO_PIN_FRONT);
+
+    if (frontDist > 0 && frontDist < OBSTACLE_THRESHOLD)
+    {
+        stopMotors();
+        Serial.println("Reached person.");
+        // Decide what to do after reaching the person
+        // For now, we can proceed to the next corner
+
+        // Reset search variables
+        searchTurnSteps = 0;
+        previousFrontDist = -1.0;
+
         // Rotate back to face along the wall
         if (wallOnRight)
         {
@@ -504,4 +654,30 @@ void rest()
         delay(200);
         robotState = MOVE_ALONG_WALL;
     }
+}
+
+void rest()
+{
+    // Since we don't need to rest, we can proceed immediately
+    // Rotate back to face along the wall
+    if (wallOnRight)
+    {
+        turn45DegreesRight();
+    }
+    else
+    {
+        turn45DegreesLeft();
+    }
+    delay(200);
+    // Turn to follow the next wall
+    if (wallOnRight)
+    {
+        turnRight();
+    }
+    else
+    {
+        turnLeft();
+    }
+    delay(200);
+    robotState = MOVE_ALONG_WALL;
 }
